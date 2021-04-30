@@ -6,9 +6,11 @@ hand.params.NStimPerEpoch = 10;
 hand.params.NStim = 300;
 hand.params.NRepPerStim = 1;
 hand.params.BlockDelay = 1.5;
+hand.params.TrialInterval = 1;
 hand.params.piezoChan = 1;
 hand.params.TTLChan = 1;
 hand.params.cameraChan = 5;
+hand.params.stimChan = 0;
 
 
 
@@ -117,23 +119,18 @@ hand.StimInfo.BlockDelayTxt.Layout.Column = 2;
         % load the file
         [Protocol, ProtocolPath] = uigetfile('.csv');
         if ~isequal(ProtocolPath, 0)
-            csvTab = readtable([ProtocolPath filesep Protocol], 'ReadRowNames',true,'ReadVariableNames',false,'Delimiter',';');
+            hand.csvTab = readtable([ProtocolPath filesep Protocol], 'ReadRowNames',true,'ReadVariableNames',false,'Delimiter',';');
         else
             uialert(hand.mainfig, 'No protocol file selected', 'No protocol')
             return
         end
 
-        soundsTable = readtable(csvTab{'SoundListFile',1}{1},'ReadVariableNames',false);
+        hand.params.SoundListFile = hand.csvTab{'SoundListFile',1}{1};
 
-        [dirSounds, ~, ~] = fileparts(csvTab{'SoundListFile',1}{1});
+        hand.params.NStims = str2double(cell2mat(hand.csvTab.Var1('NStim')));
+        hand.params.RepPerStim = str2double(cell2mat(hand.csvTab.Var1('NRepPerStim')));
 
-        nStims = str2double(cell2mat(csvTab.Var1('NStim')));
-        nRepPerStim = str2double(cell2mat(csvTab.Var1('NRepPerStim')));
-        idxPerm = repmat(1:nStims, [1,nRepPerStim]);
-        perms = randperm(nStims*nRepPerStim);
-        StimsVector = idxPerm(perms);
-
-        TrialInterval = str2double(cell2mat(csvTab.Var1('TrialInterval')));
+        hand.params.TrialInterval = str2double(cell2mat(hand.csvTab.Var1('TrialInterval')));
 
 
         % set new values
@@ -147,15 +144,12 @@ hand.StimInfo.BlockDelayTxt.Layout.Column = 2;
         set(hand.StimInfo.StimPerEp,'Text', num2str(hand.params.NStim))
         set(hand.StimInfo.RepPerEp,'Text', num2str(hand.params.NRepPerStim))
         set(hand.StimInfo.BlockDelay,'Text', num2str(hand.params.BlockDelay))
+        set(hand.StimInfo.TrialInterval,'Text',num2str(hand.params.TrialInterval))
 
     end
 
     function Change_Param(obj,event, param)
       param = eval(event.Value);
-    end
-
-    function PlaySound(obj,event)
-        disp('sound')
     end
 
     function Change_daqSettings(obj, event)
@@ -203,48 +197,70 @@ hand.StimInfo.BlockDelayTxt.Layout.Column = 2;
         hand.daqSettings.cameraTxt.Layout.Column = 2;
     end
 
-% 
-% Stims = cell([nStims 1]);
-% for i=1:nStims
-% 	[Stims{i,1},~] = audioread([dirSounds filesep cell2mat(soundsTable.Var1(i))]);
-% end
+    function PlaySound(obj,event)
+        LoadSounds()
+    end
 
+    function LoadSounds()
+        soundsTable = readtable(hand.params.SoundListFile,'ReadVariableNames',false);
+        [dirSounds, ~, ~] = fileparts(hand.params.SoundListFile);
+        hand.params.Sounds = cell([hand.params.NStim 1]);
+        rateErrorRaise =0;
+        for i=1:hand.params.Nstim
+            [hand.params.Sounds{i,1},rate] = audioread([dirSounds filesep cell2mat(soundsTable.Var1(i))]);
+            if rate ~= 192000
+                rateErrorRaise = 1;
+            end
+        end
+        if rateErrorRaise
+            uialert(hand.mainfig, 'One of more files were not at a 192kHz audio rate. They will be played as 192kHz audio file.', 'Wrong audio rate detected')
+        end
+    end
 
-% %% Create the daq session that will be used to stim
-% fs=192000;
-% s = daq.createSession('ni');
-% stimChan=s.addAnalogOutputChannel('dev4', 0, 'Voltage');
-% piezoChan = s.addAnalogInputChannel('dev4', 7, 'Voltage');
-% 
-% 
-% stimChan.TerminalConfig = 'SingleEnded';
-% piezoChan.TerminalConfig = 'SingleEnded';
-% s.Rate = fs;
-% 
-% s.addDigitalChannel('dev4', 'port0/line7', 'OutputOnly');
-% %TTLChan = s.addCounterInputChannel('dev4','ctr1','EdgeCount');
-% TTLChan = s.addDigitalChannel('dev4', 'Port0/Line6', 'InputOnly');
-% 
-% %% Split the data into bunch of blocks
-% 
-% nStimPerEp = str2double(cell2mat(csvTab.Var1('NStimPerEp')));
-% stepTrial = int32(TrialInterval*fs/1000);
-% 
-% 
-% 
-% for ii=1:1
-% 	dataOutput = zeros(nStimPerEp*stepTrial,1);
-% 	DigitalTTL = zeros(nStimPerEp*stepTrial,1);
-% 	for jj = 0:nStimPerEp-1
-% 		dataOutput(1+jj*stepTrial:jj*stepTrial+length(Stims{jj+1,1})) = Stims{jj+1,1};
-% 		DigitalTTL(1+jj*stepTrial:jj*stepTrial+0.1*fs) = 1;
-%     end
-%     s.queueOutputData([dataOutput,DigitalTTL])
-%     s.prepare()
-% 	[data,time] = s.startForeground();
-%     pause(TrialInterval*nStimPerEp/1000)
-% end
-% 	
+    function StartExperiment(obj, event)
+        [saveFile, savePath] = uiputfile('.mat');
+        
+        if hand.params.DoRandomizeStims
+            idxPerm = repmat(1:hand.params.NStim, [1,hand.params.NRepPerStim]);
+            perms = randperm(hand.params.NRepPerStim*hand.params.NStim);
+            StimsVector = idxPerm(perms);
+        end
+        
+        %% Create the daq session that will be used to stim
+        hand.params.Stimfs = 192000;
+        hand.params.Recfs = 1000;
+        Stimsession = daq.createSession('ni');
+        stimChan = Stimsession.addAnalogOutputChannel('dev4', hand.params.stimChan, 'Voltage');
+        piezoChan = Recsession.addAnalogInputChannel('dev4', hand.params.piezoChan, 'Voltage');
+
+        stimChan.TerminalConfig = 'SingleEnded';
+        piezoChan.TerminalConfig = 'SingleEnded';
+        Stimsession.Rate = hand.params.Stimfs;
+
+        Stimsession.addDigitalChannel('dev4', 'port0/line7', 'OutputOnly');
+        %TTLChan = s.addCounterInputChannel('dev4','ctr1','EdgeCount');
+        TTLChan = Recsession.addDigitalChannel('dev4', ['Port0/Line' num2str(hand.params.TTLChan)], 'InputOnly');
+
+        %% Split the data into bunch of blocks
+
+        stepTrial = int32(hand.params.TrialInterval*hand.params.Stimfs/1000);
+        
+        for ii=1:1
+            dataOutput = zeros(hand.params.NStimPerEp*stepTrial,1);
+            DigitalTTL = zeros(hand.params.NStimPerEp*stepTrial,1);
+            for jj = 0:hand.params.NStimPerEp-1
+                dataOutput(1+jj*stepTrial:jj*stepTrial+length(hand.params.Sounds{jj+1,1})) = hand.params.Sounds{jj+1,1};
+                DigitalTTL(1+jj*stepTrial:jj*stepTrial+0.1*hand.params.Stimfs) = 1;
+            end
+            Stimsession.queueOutputData([dataOutput,DigitalTTL])
+            Stimsession.prepare()
+            Stimsession.startBackground();
+            [data,time] = Recsession.startForeground();
+            pause(hand.params.TrialInterval*hand.params.NStimPerEp/1000)
+        end
+        
+        save([savePath filesep saveFile], 'StimsVector', 'data', 'time')
+    end
 
 
 
