@@ -10,12 +10,13 @@ hand.params.NStim = 300;
 hand.params.NRepPerStim = 15;
 hand.params.BlockDelay = 1.5;
 hand.params.TrialInterval = 1;
+hand.params.DoRandomizeStims = 1;
 hand.params.piezoChan = 1;
 hand.params.TTLChan = 1;
+hand.params.soundVChan = 7;
 hand.params.cameraChan = 5;
 hand.params.stimChan = 0;
-
-
+hand.AskStop = false;
 
 %% Set up the GUI
 
@@ -32,22 +33,22 @@ hand.acqSettingsMenu = uimenu(hand.menu, 'Text', 'Settings...',...
     'MenuSelectedFcn', @Change_daqSettings);
 
 hand.mainGrid = uigridlayout(hand.mainfig, [6,10]);
-hand.mainGrid.RowHeight = {150, '1x', 30, 30};
+hand.mainGrid.RowHeight = {150, '1x', 30, 30, 200};
 hand.mainGrid.ColumnWidth = {'1x', '1x', '1x', '1x', '1x', '1x', '1x', '1x', 120, 120};
 
 % Create axes, main buttons
-hand.expAxes = uiaxes(hand.mainGrid);
-hand.expAxes.Layout.Row = [1 3];
-hand.expAxes.Layout.Column = [1 6];
+hand.ExpAxes = uiaxes(hand.mainGrid);
+hand.ExpAxes.Layout.Row = [1 2];
+hand.ExpAxes.Layout.Column = [1 6];
 
 hand.ExpPan = uipanel(hand.mainGrid);
 hand.ExpPan.Layout.Row = 1;
 hand.ExpPan.Layout.Column = [9 10];
 
-hand.ExpGroup.Grid = uigridlayout(hand.ExpPan, [4 1],...
+hand.ExpGroup.Grid = uigridlayout(hand.ExpPan, [5 1],...
     'RowSpacing', 0,...
     'Padding', [0 0 0 0]);
-hand.ExpGroup.Grid.RowHeight = {22, 22, 22, 22};
+hand.ExpGroup.Grid.RowHeight = {22, 22, 22, 22, 22};
 
 
 hand.ExpName = uilabel(hand.ExpGroup.Grid,...
@@ -90,9 +91,16 @@ hand.SoundListFilename.Layout.Column = 10;
 % DISCUSSES WITH DAQ CARDS, THOU SHALL PLEASE IT NOT TO GET ERRORS.
 hand.StartExp = uibutton(hand.mainGrid, 'push',...
     'Text', 'Start',...
-    'ButtonPushedFcn', @Start_Experiment);
+    'ButtonPushedFcn', @StartExperiment);
 hand.StartExp.Layout.Row = 4;
 hand.StartExp.Layout.Column = 9;
+
+% Ok maybe sometimes we fail, so let's have a button for that as well
+hand.StopExp = uibutton(hand.mainGrid, 'push',...
+    'Text', 'Stop',...
+    'ButtonPushedFcn', @StopExperiment);
+hand.StopExp.Layout.Row = 4;
+hand.StopExp.Layout.Column = 10;
 
 % Tabbed panels for experiment info
 hand.ExpInfo.TabGroup = uitabgroup(hand.mainGrid,...
@@ -104,7 +112,7 @@ hand.StimInfo.Tab = uitab(hand.ExpInfo.TabGroup,...
     'Title', 'Stimulation info');
 
 hand.StimInfo.TabGrid = uigridlayout(hand.StimInfo.Tab);
-hand.StimInfo.TabGrid.RowHeight = {22, 22, 22, 22, 22, 22};
+hand.StimInfo.TabGrid.RowHeight = {22, 22, 22, 22, 22, 22, '1x'};
 hand.StimInfo.TabGrid.ColumnWidth = {'1x', '1x'};
 
 hand.BehaviourInfo.Tab = uitab(hand.ExpInfo.TabGroup,...
@@ -143,14 +151,14 @@ hand.StimInfo.StimPerEpTxt = uilabel(hand.StimInfo.TabGrid,...
 hand.StimInfo.StimPerEpTxt.Layout.Row = 3;
 hand.StimInfo.StimPerEpTxt.Layout.Column = 2;
 
-hand.StimInfo.RepPerEp = uieditfield(hand.StimInfo.TabGrid,...
+hand.StimInfo.RepPerStim = uieditfield(hand.StimInfo.TabGrid,...
     'Value','',...
     'ValueChangedFcn',{@Change_Param, hand.params.NRepPerStim});
-hand.StimInfo.RepPerEp.Layout.Row = 4;
-hand.StimInfo.RepPerEp.Layout.Column = 1;
+hand.StimInfo.RepPerStim.Layout.Row = 4;
+hand.StimInfo.RepPerStim.Layout.Column = 1;
 
 hand.StimInfo.RepPerEpTxt = uilabel(hand.StimInfo.TabGrid,...
-    'Text','Rep per ep');
+    'Text','Rep per stim');
 hand.StimInfo.RepPerEpTxt.Layout.Row = 4;
 hand.StimInfo.RepPerEpTxt.Layout.Column = 2;
 
@@ -164,6 +172,17 @@ hand.StimInfo.BlockDelayTxt = uilabel(hand.StimInfo.TabGrid,...
     'Text','Block delay (s)');
 hand.StimInfo.BlockDelayTxt.Layout.Row = 5;
 hand.StimInfo.BlockDelayTxt.Layout.Column = 2;
+
+hand.StimInfo.TrialInterval = uieditfield(hand.StimInfo.TabGrid,...
+    'Value', '',...
+    'ValueChangedFcn',{@Change_Param, hand.params.BlockDelay});
+hand.StimInfo.TrialInterval.Layout.Row = 6;
+hand.StimInfo.TrialInterval.Layout.Column = 1;
+
+hand.StimInfo.TrialIntervalTxt = uilabel(hand.StimInfo.TabGrid,...
+    'Text','Block delay (s)');
+hand.StimInfo.TrialIntervalTxt.Layout.Row = 6;
+hand.StimInfo.TrialIntervalTxt.Layout.Column = 2;
 
 %% Button functions
     function Load_Exp_CSV(obj,event, varargin)
@@ -183,6 +202,8 @@ hand.StimInfo.BlockDelayTxt.Layout.Column = 2;
         opts.RowNamesColumn = 1;
         opts.DataLine = [1 Inf];
         opts = setvartype(opts, 2, 'string');
+        opts.VariableNames = {'RowNames','Var'};
+        opts.SelectedVariableNames = 'Var';
         
         if ~isequal(ProtocolPath, 0)
             hand.csvTab = readtable([ProtocolPath filesep Protocol], opts);
@@ -192,25 +213,43 @@ hand.StimInfo.BlockDelayTxt.Layout.Column = 2;
         end
         
         %hand.params.SoundListFile = hand.csvTab{'SoundListFile',1}{1};
+        hand.params.NStim = str2double(hand.csvTab.Var('NStim'));
+        hand.params.NRepPerStim = str2double(hand.csvTab.Var('NRepPerStim'));
+        hand.params.NStimPerEpoch = str2double(hand.csvTab.Var('NStimPerEp'));
+        hand.params.BlockDelay = str2double(hand.csvTab.Var('BlockDelay'));
 
-        hand.params.NStims = str2double(hand.csvTab('NStim',2));
-        hand.params.RepPerStim = str2double(hand.csvTab('NRepPerStim',2));
-
-        hand.params.TrialInterval = str2double(hand.csvTab('TrialInterval',2));
-        %hand.params.ListSoundFile = string(hand.csvTab('SoundListFile',2));
+        hand.params.TrialInterval = str2double(hand.csvTab.Var('TrialInterval'));
+        hand.params.SoundListFile = hand.csvTab.Var('SoundListFile');
         
         hand.ExpFile = [ProtocolPath filesep Protocol];
 
 
         % update the buttons
-        hand.StimInfo.StimNb.Value = num2str(hand.params.NStimPerEpoch);
-        hand.StimInfo.StimPerEp.Value = num2str(hand.params.NStim);
-        hand.StimInfo.RepPerEp.Value = num2str(hand.params.NRepPerStim);
+        hand.StimInfo.StimNb.Value = num2str(hand.params.NStim);
+        hand.StimInfo.StimPerEp.Value = num2str(hand.params.NStimPerEpoch);
+        hand.StimInfo.RepPerStim.Value = num2str(hand.params.NRepPerStim);
         hand.StimInfo.BlockDelay.Value = num2str(hand.params.BlockDelay);
         hand.StimInfo.TrialInterval.Value = num2str(hand.params.TrialInterval);
-        disp(hand.params.ListSoundFile)
-        %hand.SoundListFilename.Text = hand.params.ListSoundFile;
+        [~, hand.SoundListFilename.Text, ~] = fileparts(hand.params.SoundListFile);
         hand.ExpName.Text = Protocol;
+        
+        LoadSounds()
+        
+        function LoadSounds()
+            soundsTable = readtable(hand.params.SoundListFile,'Delimiter', ';','ReadVariableNames',false);
+            [dirSounds, ~, ~] = fileparts(hand.params.SoundListFile);
+            hand.params.Sounds = cell([hand.params.NStim 1]);
+            rateErrorRaise = 0;
+            for i=1:hand.params.NStim
+                [hand.params.Sounds{i,1},rate] = audioread(strcat(dirSounds, filesep, soundsTable.Var1{i}));
+                if rate ~= 192000
+                    rateErrorRaise = 1;
+                end
+            end
+            if rateErrorRaise
+                uialert(hand.mainfig, 'One of more files were not at a 192kHz audio rate. They will be played as 192kHz audio file.', 'Wrong audio rate detected')
+            end
+        end
 
     end
 
@@ -289,22 +328,45 @@ hand.StimInfo.BlockDelayTxt.Layout.Column = 2;
     end
 
     function PlaySound(obj,event)
-        LoadSounds()
-    end
-
-    function LoadSounds()
-        soundsTable = readtable(hand.params.SoundListFile,'ReadVariableNames',false);
-        [dirSounds, ~, ~] = fileparts(hand.params.SoundListFile);
-        hand.params.Sounds = cell([hand.params.NStim 1]);
-        rateErrorRaise =0;
-        for i=1:hand.params.Nstim
-            [hand.params.Sounds{i,1},rate] = audioread([dirSounds filesep cell2mat(soundsTable.Var1(i))]);
-            if rate ~= 192000
-                rateErrorRaise = 1;
+        %% Create the daq session that will be used to stim
+        hand.params.Stimfs = 192000;
+        hand.params.Testrecfs = 250000;
+        
+        % Stimulation session with 192kHz Rate and output channels
+        Stimsession = daq('ni');
+        stimChan = addoutput(Stimsession, hand.params.Dev, hand.params.stimChan, 'Voltage');
+        
+        stimChan.TerminalConfig = 'SingleEnded';
+        
+        addoutput(Stimsession, hand.params.Dev, 'Port0/line7', 'Digital');
+        Stimsession.Rate = hand.params.Stimfs;
+        
+        % Recording sessions with higher rate (250kHz) to prevent aliasing
+        % in the mic
+        Recsession = daq('ni');
+        micChan = addinput(Recsession, hand.params.Dev, hand.params.micChan, 'Voltage');
+        
+        micChan.TerminalConfig = 'SingleEnded';
+        
+        Recsession.Rate = hand.params.Testrecfs;
+        
+        for ii=1:hand.params.NStim
+            if hand.AskStop
+                hand.AskStop = false;
+                disp('Acquisition stopped')
+                return
             end
-        end
-        if rateErrorRaise
-            uialert(hand.mainfig, 'One of more files were not at a 192kHz audio rate. They will be played as 192kHz audio file.', 'Wrong audio rate detected')
+            
+            dataOutput = zeros(stepTrial,1);
+            DigitalTTL = zeros(stepTrial,1);
+            dataOutput(1:length(hand.params.Sounds{jj+1,1})) = hand.params.Sounds{jj+1,1};
+            DigitalTTL(1:0.1*hand.params.Stimfs) = 1;
+            preload(Stimsession, [dataOutput,DigitalTTL])
+            start(Recsession, 'Duration', hand.params.TrialInterval/1000+0.1)
+            start(Stimsession)
+            pause(hand.params.TrialInterval/1000+0.1)
+            stop(Stimsession)
+            stop(Recsession)
         end
     end
 
@@ -325,45 +387,92 @@ hand.StimInfo.BlockDelayTxt.Layout.Column = 2;
         %% Create the daq session that will be used to stim
         hand.params.Stimfs = 192000;
         hand.params.Recfs = 1000;
-        Stimsession = daq.createSession('ni');
-        stimChan = Stimsession.addAnalogOutputChannel(hand.params.Dev, hand.params.stimChan, 'Voltage');
-        piezoChan = Recsession.addAnalogInputChannel(hand.params.Dev, hand.params.piezoChan, 'Voltage');
-
+        
+        % Stimulation session with 192kHz Rate and output channels
+        Stimsession = daq('ni');
+        stimChan = addoutput(Stimsession, hand.params.Dev, hand.params.stimChan, 'Voltage');
+        
         stimChan.TerminalConfig = 'SingleEnded';
-        piezoChan.TerminalConfig = 'SingleEnded';
+        
+        addoutput(Stimsession, hand.params.Dev, 'Port0/line7', 'Digital');
         Stimsession.Rate = hand.params.Stimfs;
+        
+        % Recording sessions with lower rate (10kHz) and input channels
+        Recsession = daq('ni');
+        soundV = addinput(Recsession, hand.params.Dev, ['ai' num2str(hand.params.soundVChan)], 'Voltage');
+        soundV.TerminalConfig = 'SingleEnded';
+        addinput(Recsession, hand.params.Dev, ['Port0/Line' num2str(hand.params.TTLChan)], 'Digital');
+        piezoChan = addinput(Recsession, hand.params.Dev, hand.params.piezoChan, 'Voltage');
+        
+        piezoChan.TerminalConfig = 'SingleEnded';
+        
+        Recsession.Rate = hand.params.Recfs;
+        Recsession.ScansAvailableFcnCount = hand.params.Recfs/10;
 
-        Stimsession.addDigitalChannel(hand.params.Dev, 'port0/line7', 'OutputOnly');
-        %TTLChan = s.addCounterInputChannel(hand.params.Dev,'ctr1','EdgeCount');
-        TTLChan = Recsession.addDigitalChannel(hand.params.Dev, ['Port0/Line' num2str(hand.params.TTLChan)], 'InputOnly');
-
-        %% Split the data into bunch of blocks
-
+        blockDelay = int32(hand.params.BlockDelay*hand.params.Stimfs/1000);
         stepTrial = int32(hand.params.TrialInterval*hand.params.Stimfs/1000);
         
-        expe = struct('StimsVector', StimsVector, 'time', [], 'TTL', [], 'envelops', []);
+        %expe = struct('StimsVector', StimsVector, 'time', [], 'TTL', [], 'envelopes', []);
         
-        for ii=1:hand.params.NStim*hand.params.NRepPerStim/hand.params.NStimPerEp
-            dataOutput = zeros(hand.params.NStimPerEp*stepTrial,1);
-            DigitalTTL = zeros(hand.params.NStimPerEp*stepTrial,1);
-            for jj = 0:hand.params.NStimPerEp-1
-                dataOutput(1+jj*stepTrial:jj*stepTrial+length(hand.params.Sounds{jj+1,1})) = hand.params.Sounds{jj+1,1};
-                DigitalTTL(1+jj*stepTrial:jj*stepTrial+0.1*hand.params.Stimfs) = 1;
+        hand.plots.soundPlot = animatedline(hand.ExpAxes);
+        hand.plots.TTLPlot = animatedline(hand.ExpAxes);
+        hand.plots.piezoPlot = animatedline(hand.ExpAxes);
+        plotsHandles = {hand.plots.soundPlot, hand.plots.TTLPlot, hand.plots.piezoPlot};
+        
+        Recsession.ScansAvailableFcn = @(src, event) PlotNewData(src, plotsHandles);
+        
+        
+
+        %% Split the data into bunch of blocks
+        
+        for ii=1:hand.params.NStim*hand.params.NRepPerStim/hand.params.NStimPerEpoch
+            if hand.AskStop
+                hand.AskStop = false;
+                disp('Acquisition stopped')
+                return
             end
-            Stimsession.queueOutputData([dataOutput,DigitalTTL])
-            Stimsession.prepare()
-            Stimsession.startBackground();
-            [data,time] = Recsession.startForeground();
-            pause(hand.params.TrialInterval*hand.params.NStimPerEp/1000)
-            [env, ~] = envelope(data(1));
-            expe.envelops = [expe.envelops env];
-            expe.time = [expe.time time];
-%             expe.TTL = [expe.TTL data(2)];
+            
+            for handle=1:length(plotsHandles)
+                clearpoints(plotsHandles{handle})
+                addpoints(plotsHandles{handle}, 0, 0)
+                drawnow
+            end
+            dataOutput = zeros(blockDelay+hand.params.NStimPerEpoch*stepTrial,1);
+            DigitalTTL = zeros(blockDelay+hand.params.NStimPerEpoch*stepTrial,1);
+            for jj = 0:hand.params.NStimPerEpoch-1
+                dataOutput(1+blockDelay+jj*stepTrial:blockDelay+jj*stepTrial+length(hand.params.Sounds{jj+1,1})) = hand.params.Sounds{jj+1,1};
+                DigitalTTL(1+blockDelay+jj*stepTrial:blockDelay+jj*stepTrial+0.1*hand.params.Stimfs) = 1;
+            end
+            disp(['Start of ', num2str(ii), 'th block'])
+            preload(Stimsession, [dataOutput,DigitalTTL])
+            start(Recsession, 'Duration', (hand.params.BlockDelay+hand.params.TrialInterval*hand.params.NStimPerEpoch)/1000+0.1)
+            start(Stimsession)
+            pause((hand.params.BlockDelay+hand.params.TrialInterval*hand.params.NStimPerEpoch)/1000+0.1)
+            stop(Stimsession)
+            stop(Recsession)
+            %[data,time] = read(Recsession, 'all');
+            %[env, ~] = data(:,1);
+            %expe.envelopes = [expe.envelops env];
+            %expe.time = [expe.time time];
+            %expe.TTL = [expe.TTL data(2)];
         end
         
-        save([savePath filesep saveFile], 'expe')
+        %save([savePath filesep saveFile], 'expe')
+        
+        function PlotNewData(src, plotsHandles)
+            dataIn = read(src, src.ScansAvailableFcnCount, 'OutputFormat', 'Matrix');
+            Fs = src.Rate;
+
+            for h=1:length(plotsHandles)
+                [X, ~] = getpoints(plotsHandles{h});
+                addpoints(plotsHandles{h}, X(end)+(1:double(src.ScansAvailableFcnCount))/Fs, dataIn(:,h)-h)
+                drawnow limitrate
+            end
+        end
     end
 
-
+    function StopExperiment(src, event)
+        hand.AskStop = true;
+    end
 
 end
